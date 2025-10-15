@@ -38,7 +38,7 @@
                 <span class="text-slate-600">나의 정보:</span>
                 <span id="user-id-display" class="font-mono bg-slate-200 px-4 py-2 rounded font-semibold text-slate-800"></span>
             </div>
-            <button id="change-id-btn" class="px-4 py-1 bg-slate-400 text-white rounded-md hover:bg-slate-500 text-sm font-semibold transition-colors">정보 변경 (좌석 전체 초기화)</button>
+            <button id="change-id-btn" class="px-4 py-1 bg-slate-400 text-white rounded-md hover:bg-slate-500 text-sm font-semibold transition-colors">정보 변경</button>
         </div>
 
         <div id="message-area" class="text-center mb-4 h-6"></div>
@@ -87,8 +87,8 @@
             const dateDisplayEl = document.getElementById('date-display');
 
             const TOTAL_DESKS_PER_SLOT = 9;
-            const DESK_STATE_KEY = 'standingDeskState_v5'; // Version updated
-            const USER_DATA_KEY = 'standingDeskUserData_v5'; // Version updated
+            const DESK_STATE_KEY = 'standingDeskState_v5';
+            const USER_DATA_KEY = 'standingDeskUserData_v5';
             const TIME_SLOTS = { time1: deskGrid1, time2: deskGrid2 };
 
             let desks = { time1: [], time2: [] };
@@ -238,11 +238,11 @@
                 setTimeout(() => { messageArea.innerHTML = ''; }, 3000);
             }
 
-            function changeUserIdAndReset() {
-                const newUserId = prompt("새로운 이름-학번을 입력하세요. 모든 좌석 정보가 초기화됩니다.", userId);
+            function changeUserId() {
+                const newUserId = prompt("새로운 이름-학번을 입력하세요.", userId);
 
                 if (!newUserId || newUserId.trim() === "") {
-                    return; // 사용자가 취소했거나 빈 값을 입력
+                    return;
                 }
 
                 if (newUserId === userId) {
@@ -250,24 +250,36 @@
                     return;
                 }
 
-                showMessage("정보가 변경되어 모든 좌석 현황을 초기화합니다...", false);
+                let isIdTaken = false;
+                for (const slotKey in desks) {
+                    if (desks[slotKey].some(desk => desk.occupantId === newUserId)) {
+                        isIdTaken = true;
+                        break;
+                    }
+                }
 
-                // 모든 관련 데이터 삭제
-                localStorage.removeItem(DESK_STATE_KEY);
-                localStorage.removeItem(USER_DATA_KEY);
+                if (isIdTaken) {
+                    showMessage("이미 사용 중인 정보입니다. 다시 입력해주세요.", true);
+                    return;
+                }
 
-                // 새 사용자 정보 설정 (다시 입력창이 뜨지 않도록)
-                const today = getTodayDateString();
-                const newUserState = {
-                    userId: newUserId,
-                    usage: { [today]: { committedSlot: null } }
-                };
-                localStorage.setItem(USER_DATA_KEY, JSON.stringify(newUserState));
+                const oldUserId = userId;
+                userId = newUserId;
 
-                // 페이지를 새로고침하여 초기화 적용
-                setTimeout(() => {
-                    location.reload();
-                }, 2000); // 사용자가 메시지를 읽을 수 있도록 2초 지연
+                for (const slotKey in desks) {
+                    const deskToUpdate = desks[slotKey].find(d => d.occupantId === oldUserId);
+                    if (deskToUpdate) {
+                        deskToUpdate.occupantId = newUserId;
+                        break; 
+                    }
+                }
+                
+                userIdDisplay.textContent = userId;
+
+                saveUserState();
+                saveDeskState();
+                renderApp();
+                showMessage("정보가 성공적으로 변경되었습니다.", false);
             }
 
 
@@ -307,13 +319,15 @@
                 return null;
             }
 
+
+
             // --- Initial Setup ---
             displayCurrentDate();
             initUser();
             loadDeskState();
             renderApp();
             document.getElementById('app').addEventListener('click', handleDeskClick);
-            changeIdBtn.addEventListener('click', changeUserIdAndReset);
+            changeIdBtn.addEventListener('click', changeUserId);
         });
     </script>
 </body>
