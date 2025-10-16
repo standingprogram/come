@@ -169,7 +169,7 @@
                 }
 
                 const today = getTodayDateString();
-                // Firestore 경로 수정: 표준 public/data 경로 사용
+                // Firestore 경로 수정: 올바른 세그먼트 구조로 변경
                 deskDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'desks', today);
             }
 
@@ -190,6 +190,7 @@
                     console.error("Snapshot listener error:", error);
                     showMessage("실시간 데이터를 불러오는 데 실패했습니다. 페이지를 새로고침 해주세요.", true);
                     loaderEl.style.display = 'none';
+                    appEl.classList.remove('hidden'); // 오류가 나도 앱은 보이도록 처리
                 });
             }
 
@@ -223,6 +224,7 @@
 
             function renderSlot(slotKey, container) {
                 container.innerHTML = '';
+                if (!desks || !desks[slotKey]) return; // 데이터가 없을 경우를 대비
                 desks[slotKey].forEach(desk => {
                     const { id, occupantId } = desk;
                     const deskCard = document.createElement('div');
@@ -271,6 +273,7 @@
             }
 
             function updateSummary() {
+                if (!desks || !desks.time1 || !desks.time2) return;
                 availableCountEl1.textContent = desks.time1.filter(d => d.occupantId === null).length;
                 availableCountEl2.textContent = desks.time2.filter(d => d.occupantId === null).length;
             }
@@ -337,6 +340,7 @@
 
             function findMyBooking() {
                 for (const slotKey in desks) {
+                    if (!desks[slotKey]) continue;
                     const desk = desks[slotKey].find(d => d.occupantId === userId);
                     if (desk) return { slotKey, desk };
                 }
