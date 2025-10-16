@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>스탠딩 책상 좌석 현황</title>
+    <title>스탠딩 책상 좌석 현황 (실시간 서버 연동)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -21,11 +21,31 @@
             cursor: not-allowed;
             opacity: 0.6;
         }
+        /* 로딩 스피너 스타일 */
+        #loader {
+            border: 8px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 8px solid #4f46e5;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            margin-top: -30px;
+            margin-left: -30px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-800">
 
-    <div id="app" class="container mx-auto p-4 md:p-8">
+    <div id="loader"></div>
+
+    <div id="app" class="container mx-auto p-4 md:p-8 hidden">
         
         <header class="text-center mb-6">
             <h1 class="text-3xl md:text-4xl font-bold text-slate-900">스탠딩 책상 좌석 현황</h1>
@@ -54,7 +74,6 @@
                     </p>
                 </div>
                 <main id="desk-grid-time1" class="grid grid-cols-3 gap-4 md:gap-6 bg-white p-4 rounded-lg shadow-inner">
-                    <!-- Desks for time slot 1 -->
                 </main>
             </section>
 
@@ -68,15 +87,22 @@
                     </p>
                 </div>
                 <main id="desk-grid-time2" class="grid grid-cols-3 gap-4 md:gap-6 bg-white p-4 rounded-lg shadow-inner">
-                    <!-- Desks for time slot 2 -->
                 </main>
             </section>
         </div>
 
     </div>
+    
+    <script type="module">
+        // Firebase SDK
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            const appEl = document.getElementById('app');
+            const loaderEl = document.getElementById('loader');
+
             const userIdDisplay = document.getElementById('user-id-display');
             const changeIdBtn = document.getElementById('change-id-btn');
             const availableCountEl1 = document.getElementById('available-count-time1');
@@ -87,14 +113,15 @@
             const dateDisplayEl = document.getElementById('date-display');
 
             const TOTAL_DESKS_PER_SLOT = 9;
-            const DESK_STATE_KEY = 'standingDeskState_v5';
-            const USER_DATA_KEY = 'standingDeskUserData_v5';
+            const USER_DATA_KEY_LOCAL = 'standingDeskUserData_firebase_v1';
             const TIME_SLOTS = { time1: deskGrid1, time2: deskGrid2 };
 
             let desks = { time1: [], time2: [] };
-            let userId = '';
+            let userId = ''; // 이름-학번
             let userCommittedSlot = null;
-            
+            let db;
+            let deskDocRef;
+
             function displayCurrentDate() {
                 const today = new Date();
                 const days = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
@@ -107,60 +134,81 @@
                 return new Date().toISOString().split('T')[0];
             }
 
+            // --- Local User Info Management ---
             function initUser() {
-                let userData = JSON.parse(localStorage.getItem(USER_DATA_KEY));
-                const today = getTodayDateString();
-
-                if (!userData || !userData.userId) {
+                let localData = JSON.parse(localStorage.getItem(USER_DATA_KEY_LOCAL));
+                if (!localData || !localData.userId) {
                     let newUserId = prompt("이름-학번을 입력하세요 (예: 홍길동-1106).", "");
                     if (!newUserId || newUserId.trim() === "") {
                         newUserId = '익명-' + crypto.randomUUID().substring(0, 4);
                     }
-                    userData = { userId: newUserId, usage: {} };
+                    localData = { userId: newUserId };
                 }
-
-                if (!userData.usage[today]) {
-                    userData.usage = { [today]: { committedSlot: null } };
-                }
-                
-                userId = userData.userId;
-                userCommittedSlot = userData.usage[today].committedSlot;
-
-                localStorage.setItem(USER_DATA_KEY, JSON.stringify(userData));
+                userId = localData.userId;
+                localStorage.setItem(USER_DATA_KEY_LOCAL, JSON.stringify(localData));
                 userIdDisplay.textContent = userId;
             }
-            
-            function loadDeskState() {
-                const today = getTodayDateString();
-                const storedData = JSON.parse(localStorage.getItem(DESK_STATE_KEY));
+
+            function saveUserToLocal() {
+                localStorage.setItem(USER_DATA_KEY_LOCAL, JSON.stringify({ userId }));
+            }
+
+            // --- Firestore Functions ---
+            async function setupFirebase() {
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "DEMO", authDomain: "DEMO", projectId: "DEMO" };
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 
-                if (storedData && storedData.date === today) {
-                    desks = storedData.desks;
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                const auth = getAuth(app);
+                
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
-                    desks = { time1: [], time2: [] };
-                    for (const slotKey in TIME_SLOTS) {
-                        desks[slotKey] = Array.from({ length: TOTAL_DESKS_PER_SLOT }, (_, i) => ({
-                            id: i + 1,
-                            occupantId: null,
-                        }));
+                    await signInAnonymously(auth);
+                }
+
+                const today = getTodayDateString();
+                deskDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'desks', today);
+            }
+
+            function listenToDeskChanges() {
+                onSnapshot(deskDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        desks = data.desks;
+                        userCommittedSlot = findMyCommittedSlot();
+                    } else {
+                        // Create initial document for the day
+                        createInitialDeskState();
                     }
-                    saveDeskState();
+                    renderApp();
+                    loaderEl.style.display = 'none';
+                    appEl.classList.remove('hidden');
+                });
+            }
+
+            async function createInitialDeskState() {
+                const initialState = { time1: [], time2: [] };
+                for (const slotKey in TIME_SLOTS) {
+                    initialState[slotKey] = Array.from({ length: TOTAL_DESKS_PER_SLOT }, (_, i) => ({
+                        id: i + 1, occupantId: null,
+                    }));
+                }
+                desks = initialState;
+                await updateFirestoreState();
+            }
+
+            async function updateFirestoreState() {
+                try {
+                    await setDoc(deskDocRef, { desks: desks, date: getTodayDateString() });
+                } catch (error) {
+                    console.error("Error updating Firestore: ", error);
+                    showMessage("오류: 데이터를 저장하지 못했습니다.", true);
                 }
             }
-
-            function saveDeskState() {
-                const stateToSave = { date: getTodayDateString(), desks: desks };
-                localStorage.setItem(DESK_STATE_KEY, JSON.stringify(stateToSave));
-            }
             
-            function saveUserState() {
-                 let userData = JSON.parse(localStorage.getItem(USER_DATA_KEY));
-                 const today = getTodayDateString();
-                 userData.userId = userId;
-                 userData.usage[today] = { committedSlot: userCommittedSlot };
-                 localStorage.setItem(USER_DATA_KEY, JSON.stringify(userData));
-            }
-
+            // --- UI & Logic ---
             function renderApp() {
                 for (const slotKey in TIME_SLOTS) {
                     renderSlot(slotKey, TIME_SLOTS[slotKey]);
@@ -170,11 +218,9 @@
 
             function renderSlot(slotKey, container) {
                 container.innerHTML = '';
-                
                 desks[slotKey].forEach(desk => {
                     const { id, occupantId } = desk;
                     const deskCard = document.createElement('div');
-                    
                     let cardClasses = 'desk-card p-4 rounded-lg shadow-sm flex flex-col items-center justify-center border-l-4 ';
                     let statusText, statusColor, icon, isClickable = false;
 
@@ -214,26 +260,21 @@
                     deskCard.innerHTML = `
                         <div class="text-4xl mb-3">${icon}</div>
                         <h3 class="font-bold text-lg text-slate-800">책상 #${id}</h3>
-                        <p class="font-semibold ${statusColor}">${statusText}</p>
-                    `;
+                        <p class="font-semibold ${statusColor}">${statusText}</p>`;
                     container.appendChild(deskCard);
                 });
             }
 
             function updateSummary() {
-                const available1 = desks.time1.filter(d => d.occupantId === null).length;
-                const available2 = desks.time2.filter(d => d.occupantId === null).length;
-                availableCountEl1.textContent = available1;
-                availableCountEl2.textContent = available2;
+                availableCountEl1.textContent = desks.time1.filter(d => d.occupantId === null).length;
+                availableCountEl2.textContent = desks.time2.filter(d => d.occupantId === null).length;
             }
             
             function showMessage(text, isError = false) {
                 messageArea.innerHTML = '';
                 const p = document.createElement('p');
                 p.textContent = text;
-                p.className = isError 
-                    ? 'text-red-600 font-semibold' 
-                    : 'text-green-600 font-semibold';
+                p.className = isError ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold';
                 messageArea.appendChild(p);
                 setTimeout(() => { messageArea.innerHTML = ''; }, 3000);
             }
@@ -241,10 +282,7 @@
             function changeUserId() {
                 const newUserId = prompt("새로운 이름-학번을 입력하세요.", userId);
 
-                if (!newUserId || newUserId.trim() === "") {
-                    return;
-                }
-
+                if (!newUserId || newUserId.trim() === "") return;
                 if (newUserId === userId) {
                     showMessage("현재 정보와 동일합니다.", true);
                     return;
@@ -257,25 +295,18 @@
                         break;
                     }
                 }
-
                 if (isIdTaken) {
-                    showMessage("이미 사용 중인 정보입니다. 다시 입력해주세요.", true);
+                    showMessage("이미 사용 중인 정보입니다.", true);
                     return;
                 }
                 
-                // Reset the user's committed time slot for the day as a new identity.
-                userCommittedSlot = null;
-
-                // Update the user ID to the new one.
                 userId = newUserId;
                 userIdDisplay.textContent = userId;
-
-                // Save new user state, but DO NOT modify the desk state.
-                saveUserState(); 
+                saveUserToLocal();
+                userCommittedSlot = findMyCommittedSlot(); 
                 renderApp();
-                showMessage("정보가 변경되었습니다. 새로운 좌석을 선택할 수 있습니다.", false);
+                showMessage("정보가 변경되었습니다.", false);
             }
-
 
             function handleDeskClick(e) {
                 const card = e.target.closest('.desk-card');
@@ -288,21 +319,15 @@
                 const myCurrentBooking = findMyBooking();
 
                 if (myCurrentBooking && myCurrentBooking.desk === targetDesk) {
-                    targetDesk.occupantId = null;
-                } 
-                else if (targetDesk.occupantId === null) {
+                    targetDesk.occupantId = null; // 반납
+                } else if (targetDesk.occupantId === null) {
                     if (myCurrentBooking) {
-                        myCurrentBooking.desk.occupantId = null;
+                        myCurrentBooking.desk.occupantId = null; // 자리 이동
                     }
                     targetDesk.occupantId = userId;
-                    if (!userCommittedSlot) {
-                        userCommittedSlot = slotKey;
-                    }
                 }
                 
-                saveUserState();
-                saveDeskState();
-                renderApp();
+                updateFirestoreState();
             }
 
             function findMyBooking() {
@@ -313,13 +338,17 @@
                 return null;
             }
 
-
+            function findMyCommittedSlot() {
+                const booking = findMyBooking();
+                return booking ? booking.slotKey : null;
+            }
 
             // --- Initial Setup ---
             displayCurrentDate();
             initUser();
-            loadDeskState();
-            renderApp();
+            await setupFirebase();
+            listenToDeskChanges();
+            
             document.getElementById('app').addEventListener('click', handleDeskClick);
             changeIdBtn.addEventListener('click', changeUserId);
         });
